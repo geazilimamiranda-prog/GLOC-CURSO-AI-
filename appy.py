@@ -1,45 +1,34 @@
 import streamlit as st
+import pandas as pd
+import plotly.express as px
 from openai import OpenAI
 
-# Layout wide para permitir controle fino das colunas
-st.set_page_config(page_title="Chatbot Didático: Groq + RAG", page_icon="🤖", layout="wide")
+# Configuração da página em modo wide
+st.set_page_config(
+    page_title="Análise de CSV com Gráficos e Chat RAG (Groq)",
+    page_icon="📊",
+    layout="wide"
+)
 
-# CSS para alinhar o st.chat_input exatamente na largura e posição da coluna central (60% do total)
-st.markdown("""
-<style>
-    /* Trava o chat_input na largura da coluna do meio e centraliza */
-    [data-testid="stChatInput"] {
-        max-width: 60% !important;
-        margin-left: auto !important;
-        margin-right: auto !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.title("📊 Laboratório de Dados: CSV, Gráficos e RAG com Groq")
+st.markdown("Faça o upload de uma planilha CSV, explore gráficos visuais interativos e converse diretamente com os dados usando modelos de IA da Groq.")
 
-st.title("🤖 Laboratório de IA: Chatbot, RAG e Personas")
-
-# Inicialização do histórico de mensagens
+# Inicialização do histórico de mensagens no estado da sessão
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # ==============================================================================
-# PROPORÇÃO DAS COLUNAS: LATERAIS MAIS ENXUTAS (0.8) E CHAT EXPANDIDO (2.4)
+# BARRA LATERAL: CONFIGURAÇÕES E UPLOAD DO CSV
 # ==============================================================================
-col_controles, col_chat, col_preview = st.columns([0.8, 2.4, 0.8], gap="medium")
-
-# ==============================================================================
-# 1. COLUNA DA ESQUERDA: API, PERSONA, UPLOAD E CONTROLES (MENOR LARGURA)
-# ==============================================================================
-with col_controles:
-    st.subheader("⚙️ Controles")
-
-    # Bloco API
-    st.markdown("##### 🔑 API & Modelo")
+with st.sidebar:
+    st.header("⚙️ Configurações")
+    
+    # Chave da API da Groq
     user_api_key = st.text_input(
         "API Key (Groq):", 
         type="password", 
         placeholder="gsk_...",
-        help="Insira a chave obtida em console.groq.com"
+        help="Obtenha sua chave gratuita em console.groq.com"
     )
 
     BASE_URL = "https://api.groq.com/openai/v1"
@@ -50,7 +39,7 @@ with col_controles:
         try:
             client = OpenAI(base_url=BASE_URL, api_key=user_api_key.strip())
             
-            # Filtra modelos de texto/chat disponíveis
+            # Busca dinâmica de modelos de chat disponíveis na Groq
             modelos_disponiveis = [
                 m.id for m in client.models.list().data 
                 if not any(termo in m.id.lower() for termo in ["whisper", "guard", "audio"])
@@ -59,7 +48,7 @@ with col_controles:
             if modelos_disponiveis:
                 padrao_idx = 0
                 for idx, nome in enumerate(sorted(modelos_disponiveis)):
-                    if "gpt-oss-20b" in nome:
+                    if "llama-3.3-70b" in nome or "llama3" in nome:
                         padrao_idx = idx
                         break
                         
@@ -68,130 +57,153 @@ with col_controles:
                     sorted(modelos_disponiveis),
                     index=padrao_idx
                 )
-                st.success("Conectado!", icon="✅")
+                st.success("Conectado à Groq!", icon="✅")
             else:
                 st.error("Nenhum modelo de chat liberado.")
         except Exception as e:
-            st.error(f"Erro: {e}")
+            st.error(f"Erro na conexão: {e}")
             client = None
     else:
-        st.info("Cole sua chave acima.")
+        st.info("Insira sua chave da Groq para habilitar o chat.")
 
     st.markdown("---")
-
-    # Bloco Persona
-    st.markdown("##### 🎭 Persona da IA")
-    persona_padrao = "Você é um especialista em TI focado em resolução de problemas técnicos de forma rápida e precisa."
-    persona_customizada = st.text_area(
-        "Instrução da IA:",
-        value=persona_padrao,
-        height=100,
-        help="Orienta o comportamento do modelo durante as respostas."
-    )
-
-    st.markdown("---")
-
-    # Bloco Upload
-    st.markdown("##### 📁 Documento (RAG)")
-    arquivo_enviado = st.file_uploader(
-        "Upload (.txt, .csv, .md):",
-        type=["txt", "csv", "md"]
-    )
+    st.header("📁 Fonte de Dados")
     
-    conteudo_documento = ""
-    if arquivo_enviado:
+    arquivo_enviado = st.file_uploader("Envie seu arquivo CSV", type=["csv"])
+    
+    df = None
+    csv_texto = ""
+    
+    if arquivo_enviado is not None:
         try:
-            conteudo_documento = arquivo_enviado.read().decode("utf-8", errors="replace")
-            st.caption(f"Status: OK ({len(conteudo_documento)} chars)")
+            # Tenta ler o CSV (com tratamento automático básico de separadores comuns)
+            df = pd.read_csv(arquivo_enviado)
+            # Converte uma amostra/resumo do DataFrame para texto para uso no RAG da IA
+            csv_texto = df.head(100).to_string(index=False)
+            st.success(f"Arquivo carregado com sucesso! ({df.shape[0]} linhas, {df.shape[1]} colunas)")
         except Exception as e:
-            st.error(f"Erro: {e}")
+            st.error(f"Erro ao ler o CSV: {e}")
 
     st.markdown("---")
-
-    # Botões de Controle
-    if st.button("🧹 Limpar Histórico", use_container_width=True):
+    if st.button("🧹 Limpar Histórico do Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
 # ==============================================================================
-# 2. COLUNA DO CENTRO: CHAT (HISTÓRICO E DIÁLOGO)
+# CORPO PRINCIPAL: ABAS DE VISUALIZAÇÃO E CHAT
 # ==============================================================================
-with col_chat:
-    st.subheader("💬 Diálogo")
-    
-    # Caixa com rolagem vertical
-    chat_container = st.container(height=580)
-    with chat_container:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
+if df is not None:
+    tab1, tab2, tab3 = st.tabs(["📋 Visualização e Resumo", "📈 Visualizador de Gráficos", "💬 Chat RAG com os Dados"])
 
-# ==============================================================================
-# 3. COLUNA DA DIREITA: PRÉ-VISUALIZAÇÃO DO ARQUIVO (MESMA LARGURA DA ESQUERDA)
-# ==============================================================================
-with col_preview:
-    st.subheader("📄 Visualização")
-    if conteudo_documento:
-        st.caption(f"Arquivo: **{arquivo_enviado.name}**")
-        st.text_area(
-            label="Conteúdo em memória:",
-            value=conteudo_documento,
-            height=580,
-            disabled=True
-        )
-    else:
-        st.info("Nenhum arquivo carregado. Anexe um arquivo no painel esquerdo.")
+    # --- ABA 1: TABELA E ESTATÍSTICAS ---
+    with tab1:
+        st.subheader("Visualização das Primeiras Linhas")
+        st.dataframe(df.head(10), use_container_width=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Estatísticas Descritivas")
+            st.dataframe(df.describe(), use_container_width=True)
+        with col2:
+            st.subheader("Informações do DataFrame")
+            # Captura o info do pandas em formato de texto para exibir no Streamlit
+            import io
+            buffer = io.StringIO()
+            df.info(buf=buffer)
+            s = buffer.getvalue()
+            st.text(s)
 
-# ==============================================================================
-# 4. CAMPO DE ENTRADA DO CHAT (ALINHADO À COLUNA CENTRAL)
-# ==============================================================================
-if user_input := st.chat_input("Faça sua pergunta sobre o arquivo ou converse com o bot..."):
-    if not client or not modelo_selecionado:
-        st.warning("⚠️ Insira uma chave de API válida no painel de controle antes de enviar perguntas.")
-        st.stop()
+    # --- ABA 2: GRÁFICOS INTERATIVOS ---
+    with tab2:
+        st.subheader("Geração Dinâmica de Gráficos (Plotly)")
+        
+        col_g1, col_g2, col_g3 = st.columns(3)
+        
+        colunas_disponiveis = df.columns.tolist()
+        colunas_numericas = df.select_dtypes(include=['number']).columns.tolist()
+        
+        with col_g1:
+            tipo_grafico = st.selectbox(
+                "Tipo de Gráfico", 
+                ["Dispersão (Scatter)", "Linha", "Histograma", "Barra"]
+            )
+        
+        with col_g2:
+            eixo_x = st.selectbox("Eixo X", colunas_disponiveis)
+            
+        with col_g3:
+            eixo_y = st.selectbox("Eixo Y (Numérico)", colunas_numericas if colunas_numericas else colunas_disponiveis)
 
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    with chat_container:
-        with st.chat_message("user"):
-            st.write(user_input)
+        # Renderização do gráfico com base na seleção
+        try:
+            if tipo_grafico == "Dispersão (Scatter)":
+                fig = px.scatter(df, x=eixo_x, y=eixo_y, title=f"Dispersão de {eixo_y} por {eixo_x}")
+            elif tipo_grafico == "Linha":
+                fig = px.line(df, x=eixo_x, y=eixo_y, title=f"Gráfico de Linha: {eixo_y} vs {eixo_x}")
+            elif tipo_grafico == "Histograma":
+                fig = px.histogram(df, x=eixo_x, title=f"Histograma de {eixo_x}")
+            elif tipo_grafico == "Barra":
+                fig = px.bar(df, x=eixo_x, y=eixo_y, title=f"Gráfico de Barras: {eixo_y} por {eixo_x}")
+            
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Selecione colunas compatíveis para gerar o gráfico. Detalhe: {e}")
 
-    # Constrói o System Prompt (Persona + Contexto RAG)
-    mensagens_api = []
-    prompt_sistema = f"### IDENTIDADE E REGRAS DA PERSONA:\n{persona_customizada.strip()}\n\n"
-
-    if conteudo_documento:
-        prompt_sistema += (
-            "### REGRAS ESPECÍFICAS DE CONSULTA (RAG):\n"
-            "1. Responda à dúvida do usuário usando EXCLUSIVAMENTE as informações contidas no documento abaixo.\n"
-            "2. Seja direto e conciso, respondendo em no máximo 3 frases.\n"
-            "3. Se a informação solicitada não constar no documento, responda estritamente: "
-            "'A informação solicitada não consta no documento fornecido.'\n\n"
-            f"--- INÍCIO DO DOCUMENTO ---\n{conteudo_documento}\n--- FIM DO DOCUMENTO ---"
-        )
-    else:
-        prompt_sistema += "Responda de forma clara, objetiva e coerente com sua persona."
-
-    mensagens_api.append({"role": "system", "content": prompt_sistema})
-
-    for m in st.session_state.messages:
-        mensagens_api.append({"role": m["role"], "content": m["content"]})
-
-    # Chamada à API
-    try:
+    # --- ABA 3: CHAT RAG COM OS DADOS ---
+    with tab3:
+        st.subheader("Converse com sua base de dados CSV")
+        st.markdown("Faça perguntas sobre tendências, valores máximos, mínimos ou resumos do arquivo carregado.")
+        
+        # Caixa de exibição do histórico do chat
+        chat_container = st.container(height=400)
         with chat_container:
-            with st.spinner("Processando resposta..."):
-                response = client.chat.completions.create(
-                    model=modelo_selecionado,
-                    messages=mensagens_api,
-                    temperature=0.2 if conteudo_documento else 0.7,
-                    max_tokens=300
-                )
-                resposta = response.choices[0].message.content
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.write(message["content"])
 
-            st.session_state.messages.append({"role": "assistant", "content": resposta})
-            with st.chat_message("assistant"):
-                st.write(resposta)
+        # Entrada de texto do chat
+        if user_input := st.chat_input("Ex: Qual é a média dos valores da coluna X?"):
+            if not client or not modelo_selecionado:
+                st.warning("⚠️ Insira sua chave de API da Groq na barra lateral para conversar com os dados.")
+                st.stop()
 
-    except Exception as e:
-        st.error(f"Erro na geração da resposta: {e}")
+            # Adiciona mensagem do usuário
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with chat_container:
+                with st.chat_message("user"):
+                    st.write(user_input)
 
+            # Monta o Prompt do Sistema combinando contexto do CSV
+            prompt_sistema = (
+                "Você é um cientista de dados especialista em analisar planilhas CSV.\n"
+                "Responda às perguntas do usuário baseando-se EXCLUSIVAMENTE nos dados da amostra fornecida abaixo.\n"
+                "Se a resposta não puder ser encontrada nos dados, diga que não possui informações suficientes.\n\n"
+                f"--- AMOSTRA DOS DADOS DO CSV ---\n{csv_texto}\n---------------------------------"
+            )
+
+            mensagens_api = [{"role": "system", "content": prompt_sistema}]
+            for m in st.session_state.messages:
+                mensagens_api.append({"role": m["role"], "content": m["content"]})
+
+            # Chamada à API da Groq
+            try:
+                with chat_container:
+                    with st.spinner("Analisando dados e gerando resposta..."):
+                        response = client.chat.completions.create(
+                            model=modelo_selecionado,
+                            messages=mensagens_api,
+                            temperature=0.1,
+                            max_tokens=500
+                        )
+                        resposta = response.choices[0].message.content
+
+                # Adiciona e exibe a resposta do assistente
+                st.session_state.messages.append({"role": "assistant", "content": resposta})
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        st.write(resposta)
+            except Exception as e:
+                st.error(f"Erro ao comunicar com a API da Groq: {e}")
+
+else:
+    st.info("👈 Por favor, faça o upload de um arquivo CSV na barra lateral para iniciar a análise, visualizar gráficos e conversar com os dados.")
