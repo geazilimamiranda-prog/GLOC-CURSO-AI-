@@ -194,4 +194,4 @@ if user_input := st.chat_input("Faça sua pergunta sobre o arquivo ou converse c
 
     except Exception as e:
         st.error(f"Erro na geração da resposta: {e}")
-Exibindo app_groq.py…
+
